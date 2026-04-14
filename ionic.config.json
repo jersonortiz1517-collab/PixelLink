@@ -1,0 +1,7 @@
+{
+  "name": "PixelLink",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "angular-standalone"
+}
