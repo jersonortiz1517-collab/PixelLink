@@ -10,8 +10,10 @@ import {
   pencilOutline, squareOutline, ellipseOutline, removeOutline,
   colorFillOutline, trashOutline, sendOutline,
   arrowUndoOutline, arrowRedoOutline, bluetoothOutline, bluetooth,
-  removeCircleOutline, colorWandOutline
+  removeCircleOutline, colorWandOutline, refreshOutline, closeCircleOutline
 } from 'ionicons/icons';
+import { BluetoothService, BtDevice } from '../services/bluetooth.service';
+import { Subscription } from 'rxjs';
 
 const ROWS = 24;
 const COLS = 96;
@@ -53,8 +55,18 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   baudRate = '115200';
   sending = false;
   sendProgress = 0;
-  private serialPort: any = null;
   private ctx!: CanvasRenderingContext2D;
+
+  // Bluetooth UI state
+  btMode: 'bluetooth' | 'serial' | 'none' = 'none';
+  showDevicePicker = false;
+  btDevices: BtDevice[] = [];
+  btScanning = false;
+  btError = '';
+  private btStatusSub?: Subscription;
+  private btNameSub?: Subscription;
+
+  constructor(private bt: BluetoothService) {}
 
   tools: { id: ToolId; icon: string; label: string; key: string }[] = [
     { id: 'pencil',     icon: 'pencil-outline',        label: 'Lápiz',       key: 'P' },
@@ -218,10 +230,18 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
       pencilOutline, squareOutline, ellipseOutline, removeOutline,
       colorFillOutline, trashOutline, sendOutline,
       arrowUndoOutline, arrowRedoOutline, bluetoothOutline, bluetooth,
-      removeCircleOutline, colorWandOutline,
+      removeCircleOutline, colorWandOutline, refreshOutline, closeCircleOutline,
     });
     this.initGrid();
     this.saveHistory();
+
+    this.btMode = this.bt.getMode();
+    this.btStatusSub = this.bt.status$.subscribe((s) => {
+      this.arduinoConnected = s === 'connected';
+    });
+    this.btNameSub = this.bt.deviceName$.subscribe((n) => {
+      this.portName = n;
+    });
   }
 
   ngAfterViewInit() {
@@ -234,7 +254,10 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     }, 50);
   }
 
-  ngOnDestroy() {}
+  ngOnDestroy() {
+    this.btStatusSub?.unsubscribe();
+    this.btNameSub?.unsubscribe();
+  }
 
   // ─── GRID ────────────────────────────────────────────────────────────────
 
@@ -525,44 +548,72 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   get canUndo() { return this.historyIndex > 0; }
   get canRedo() { return this.historyIndex < this.history.length - 1; }
 
-  // ─── ARDUINO (Web Serial API) ─────────────────────────────────────────────
+  // ─── ARDUINO (Bluetooth Classic / Web Serial) ────────────────────────────
 
   async toggleArduino() {
-    this.arduinoConnected ? await this.disconnectArduino() : await this.connectArduino();
-  }
-
-  async connectArduino() {
-    if (!('serial' in navigator)) {
-      alert('Web Serial API no soportada.\nUsa Google Chrome o Microsoft Edge en escritorio.');
+    if (this.arduinoConnected) {
+      await this.disconnectArduino();
       return;
     }
-    try {
-      this.serialPort = await (navigator as any).serial.requestPort();
-      await this.serialPort.open({ baudRate: parseInt(this.baudRate) });
-      this.arduinoConnected = true;
-      this.portName = 'Puerto Serial';
-    } catch (e: any) {
-      console.error('Error conectando:', e.message);
+    this.btError = '';
+    if (this.btMode === 'bluetooth') {
+      // Android: abrimos selector de dispositivos emparejados
+      this.showDevicePicker = true;
+      await this.refreshDevices();
+    } else if (this.btMode === 'serial') {
+      // Escritorio con Web Serial
+      try {
+        await this.bt.connect(undefined, parseInt(this.baudRate));
+      } catch (e: any) {
+        this.btError = e?.message || 'No se pudo conectar';
+      }
+    } else {
+      this.btError = 'Esta plataforma no soporta Bluetooth Serial ni Web Serial.';
     }
+  }
+
+  async refreshDevices() {
+    this.btScanning = true;
+    this.btError = '';
+    try {
+      this.btDevices = await this.bt.listPaired();
+      if (this.btDevices.length === 0) {
+        this.btError = 'No hay dispositivos emparejados. Empareja el HC-05/06 desde Ajustes > Bluetooth.';
+      }
+    } catch (e: any) {
+      this.btError = e?.message || 'Error listando dispositivos';
+    } finally {
+      this.btScanning = false;
+    }
+  }
+
+  async connectToDevice(device: BtDevice) {
+    this.btError = '';
+    try {
+      await this.bt.connect(device.address);
+      this.portName = device.name;
+      this.showDevicePicker = false;
+    } catch (e: any) {
+      this.btError = e?.message || 'No se pudo conectar';
+    }
+  }
+
+  cancelDevicePicker() {
+    this.showDevicePicker = false;
   }
 
   async disconnectArduino() {
-    if (this.serialPort) {
-      try { await this.serialPort.close(); } catch (_) {}
-      this.serialPort = null;
-    }
-    this.arduinoConnected = false;
-    this.portName = '';
+    await this.bt.disconnect();
   }
 
   async sendToArduino() {
-    if (!this.arduinoConnected || !this.serialPort) return;
+    if (!this.arduinoConnected) return;
     this.sending = true;
     this.sendProgress = 0;
     try {
-      const writer = this.serialPort.writable.getWriter();
-      // Protocolo: [0xFF,0xFE,0xFD] + R,G,B×(96×24) + [0xFD,0xFE,0xFF]
-      const buf = new Uint8Array(3 + ROWS * COLS * 3 + 3);
+      // Protocolo: [0xFF,0xFE,0xFD] + R,G,B x (96x24) + [0xFD,0xFE,0xFF]
+      const total = 3 + ROWS * COLS * 3 + 3;
+      const buf = new Uint8Array(total);
       let i = 0;
       buf[i++] = 0xFF; buf[i++] = 0xFE; buf[i++] = 0xFD;
       for (let r = 0; r < ROWS; r++) {
@@ -570,17 +621,24 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
           const rgb = this.hexToRgb(this.grid[r][c]);
           buf[i++] = rgb.r; buf[i++] = rgb.g; buf[i++] = rgb.b;
         }
-        this.sendProgress = Math.round(((r + 1) / ROWS) * 100);
       }
       buf[i++] = 0xFD; buf[i++] = 0xFE; buf[i++] = 0xFF;
-      await writer.write(buf);
-      writer.releaseLock();
+
+      await this.bt.write(buf, {
+        chunkSize: 256,
+        chunkDelayMs: this.btMode === 'bluetooth' ? 10 : 0,
+        onProgress: (sent, t) => {
+          this.sendProgress = Math.round((sent / t) * 100);
+        },
+      });
+      this.sendProgress = 100;
     } catch (e: any) {
-      console.error('Error enviando:', e.message);
+      console.error('Error enviando:', e?.message);
+      this.btError = e?.message || 'Error enviando frame';
+    } finally {
+      this.sending = false;
+      setTimeout(() => { this.sendProgress = 0; }, 1500);
     }
-    this.sending = false;
-    this.sendProgress = 100;
-    setTimeout(() => { this.sendProgress = 0; }, 1500);
   }
 
   hexToRgb(hex: string): { r: number; g: number; b: number } {
