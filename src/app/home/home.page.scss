@@ -106,8 +106,8 @@ ion-toolbar.main-toolbar {
 .btn-connect {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
+  gap: 6px;
+  padding: 5px 12px;
   height: 30px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -115,9 +115,30 @@ ion-toolbar.main-toolbar {
   color: var(--text-2);
   cursor: pointer;
   font-size: 12px;
-  transition: all 0.15s;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  min-width: 118px;
+  justify-content: center;
 
-  &:hover { border-color: var(--accent); color: var(--accent); }
+  &:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+
+  &:disabled {
+    cursor: progress;
+    opacity: 0.95;
+  }
+
+  &.connecting {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
+    animation: connect-breathe 1.4s ease-in-out infinite;
+  }
+
+  &.error {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: rgba(255, 59, 48, 0.08);
+  }
 
   &.connected {
     border-color: var(--success);
@@ -128,25 +149,61 @@ ion-toolbar.main-toolbar {
   ion-icon { font-size: 15px; }
 }
 
+// Spinner compacto dentro del boton
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spinner-rotate 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spinner-rotate {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes connect-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-dim); }
+  50%      { box-shadow: 0 0 0 6px transparent; }
+}
+
 .btn-send {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 12px;
-  height: 30px;
-  border: none;
-  border-radius: 6px;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 16px;
+  height: 34px;
+  min-width: 96px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
   background: var(--accent);
   color: #000;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.3px;
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.35);
   transition: all 0.15s;
 
-  &:hover:not(:disabled) { opacity: 0.85; box-shadow: 0 0 12px rgba(0, 212, 255, 0.5); }
-  &:disabled { opacity: 0.3; cursor: not-allowed; }
-  ion-icon { font-size: 14px; }
+  ion-icon { font-size: 16px; }
+
+  &:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 0 16px rgba(0, 212, 255, 0.7);
+  }
+  &:active:not(:disabled) { transform: translateY(0); }
+
+  &:disabled {
+    cursor: not-allowed;
+    background: transparent;
+    color: var(--accent);
+    border-color: rgba(0, 212, 255, 0.45);
+    box-shadow: none;
+    opacity: 0.75;
+  }
 }
 
 // ── LAYOUT PRINCIPAL ───────────────────────────────────────────
@@ -515,27 +572,103 @@ ion-toolbar.main-toolbar {
 // Arduino section
 .arduino-section {}
 
-.arduino-status {
-  display: flex;
+// ─── Chip de estado del Arduino (compacto, una sola fila) ─────────────────
+.status-chip {
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 8px;
-  font-size: 12px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  border-radius: 999px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  font-size: 11px;
   color: var(--text-2);
+  min-height: 28px;
+  max-width: 100%;
+  transition: all 0.25s ease;
+
+  .chip-label {
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .chip-device {
+    color: var(--text-2);
+    opacity: 0.7;
+    font-family: 'SF Mono', 'Courier New', monospace;
+    font-size: 10px;
+    padding-left: 6px;
+    border-left: 1px solid var(--border);
+    margin-left: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 130px;
+  }
+
+  .chip-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-2);
+    flex-shrink: 0;
+  }
+
+  .chip-spinner {
+    width: 10px;
+    height: 10px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spinner-rotate 0.8s linear infinite;
+    flex-shrink: 0;
+    opacity: 0.9;
+  }
+
+  // Variaciones por fase
+  &[data-phase="idle"] {
+    // Estado por defecto, gris
+  }
+  &[data-phase="connecting"],
+  &[data-phase="awaiting-fw"],
+  &[data-phase="sending"] {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
+  }
+  &[data-phase="ready"] {
+    border-color: var(--success);
+    color: var(--success);
+    background: rgba(48, 209, 88, 0.08);
+    .chip-dot {
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+  }
+  &[data-phase="frame-ok"] {
+    border-color: var(--success);
+    color: var(--success);
+    background: rgba(48, 209, 88, 0.15);
+    animation: chip-flash 0.35s ease;
+    .chip-dot {
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+  }
+  &[data-phase="error"] {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: rgba(255, 59, 48, 0.08);
+    .chip-dot { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+  }
 }
 
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-2);
-  flex-shrink: 0;
-
-  &.on {
-    background: var(--success);
-    box-shadow: 0 0 6px var(--success);
-    animation: pulse-dot 2s ease-in-out infinite;
-  }
+@keyframes chip-flash {
+  0%   { transform: scale(1);    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.4); }
+  50%  { transform: scale(1.03); box-shadow: 0 0 0 6px transparent; }
+  100% { transform: scale(1); }
 }
 
 .ctrl-label-sm {
@@ -728,5 +861,26 @@ ion-toolbar.main-toolbar {
     cursor: pointer;
     &:hover:not(:disabled) { background: rgba(255,255,255,0.12); }
     &:disabled { opacity: 0.5; cursor: not-allowed; }
+    &.btn-perm {
+      background: rgba(0, 212, 255, 0.12);
+      border-color: rgba(0, 212, 255, 0.35);
+      color: #9be7ff;
+      &:hover:not(:disabled) { background: rgba(0, 212, 255, 0.2); }
+    }
   }
+}
+
+.btn-perm-inline {
+  margin-top: 10px;
+  width: 100%;
+  background: rgba(0, 212, 255, 0.12);
+  border: 1px solid rgba(0, 212, 255, 0.35);
+  color: #9be7ff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  cursor: pointer;
+  &:hover:not(:disabled) { background: rgba(0, 212, 255, 0.2); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
 }

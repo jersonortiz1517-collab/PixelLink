@@ -23,10 +23,27 @@
         <div class="divider-v"></div>
         <button
           class="btn-connect"
-          [class.connected]="arduinoConnected"
+          [class.connected]="arduinoConnected && firmwareReady"
+          [class.connecting]="phaseBusy && btPhase !== 'sending'"
+          [class.error]="btPhase === 'error'"
+          [disabled]="phaseBusy && btPhase !== 'sending'"
           (click)="toggleArduino()">
-          <ion-icon [name]="arduinoConnected ? 'bluetooth' : 'bluetooth-outline'"></ion-icon>
-          <span>{{ arduinoConnected ? 'Conectado' : 'Conectar' }}</span>
+          @if (phaseBusy && btPhase !== 'sending') {
+            <span class="btn-spinner"></span>
+          } @else {
+            <ion-icon [name]="arduinoConnected ? 'bluetooth' : 'bluetooth-outline'"></ion-icon>
+          }
+          <span>
+            @switch (btPhase) {
+              @case ('connecting')  { Conectando... }
+              @case ('awaiting-fw') { Esperando Arduino... }
+              @case ('ready')       { Conectado }
+              @case ('frame-ok')    { Enviado }
+              @case ('sending')     { Conectado }
+              @case ('error')       { Reintentar }
+              @default              { Conectar }
+            }
+          </span>
         </button>
         <button class="btn-send" [disabled]="!arduinoConnected" (click)="sendToArduino()">
           <ion-icon name="send-outline"></ion-icon>
@@ -176,9 +193,18 @@
 
       <section class="panel-section arduino-section">
         <h4 class="section-title">Arduino</h4>
-        <div class="arduino-status">
-          <div class="status-dot" [class.on]="arduinoConnected"></div>
-          <span>{{ arduinoConnected ? portName : 'Sin conexion' }}</span>
+
+        <!-- Chip de estado compacto con spinner integrado -->
+        <div class="status-chip" [attr.data-phase]="btPhase">
+          @if (phaseBusy) {
+            <span class="chip-spinner"></span>
+          } @else {
+            <span class="chip-dot"></span>
+          }
+          <span class="chip-label">{{ phaseLabel }}</span>
+          @if (arduinoConnected && portName) {
+            <span class="chip-device">{{ portName }}</span>
+          }
         </div>
 
         <div class="arduino-mode-badge">
@@ -204,13 +230,27 @@
           </p>
         }
         @if (!arduinoConnected && btMode === 'bluetooth') {
-          <p class="arduino-hint">
-            Empareja el HC-05/06 desde Ajustes &gt; Bluetooth antes de conectar.
-          </p>
+          @if (preferredDevice) {
+            <p class="arduino-hint">
+              Dispositivo por defecto: <strong>{{ preferredDevice.name }}</strong>
+              <span class="mono">({{ preferredDevice.address }})</span>
+            </p>
+          } @else {
+            <p class="arduino-hint">
+              Empareja el HC-05/06 desde Ajustes &gt; Bluetooth antes de conectar.
+            </p>
+          }
         }
 
         @if (btError) {
           <div class="arduino-error">{{ btError }}</div>
+        }
+
+        @if (btMode === 'bluetooth') {
+          <button class="btn-secondary btn-perm-inline" (click)="reloadPermissions()" [disabled]="btScanning">
+            <ion-icon name="refresh-outline"></ion-icon>
+            <span>{{ btScanning ? 'Solicitando...' : 'Recargar permisos BT' }}</span>
+          </button>
         }
 
         <div class="arduino-protocol">
@@ -265,6 +305,10 @@
           <button class="btn-secondary" (click)="refreshDevices()" [disabled]="btScanning">
             <ion-icon name="refresh-outline"></ion-icon>
             <span>Actualizar</span>
+          </button>
+          <button class="btn-secondary btn-perm" (click)="reloadPermissions()" [disabled]="btScanning" title="Volver a solicitar permisos de Bluetooth">
+            <ion-icon name="refresh-outline"></ion-icon>
+            <span>Recargar permisos</span>
           </button>
           <button class="btn-secondary" (click)="cancelDevicePicker()">Cancelar</button>
         </footer>

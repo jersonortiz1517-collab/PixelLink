@@ -12,7 +12,7 @@ import {
   arrowUndoOutline, arrowRedoOutline, bluetoothOutline, bluetooth,
   removeCircleOutline, colorWandOutline, refreshOutline, closeCircleOutline
 } from 'ionicons/icons';
-import { BluetoothService, BtDevice } from '../services/bluetooth.service';
+import { BluetoothService, BtDevice, FirmwareEvent } from '../services/bluetooth.service';
 import { Subscription } from 'rxjs';
 
 const ROWS = 24;
@@ -63,8 +63,17 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   btDevices: BtDevice[] = [];
   btScanning = false;
   btError = '';
+  preferredDevice: BtDevice | null = null;
+  /** Handshake con el firmware: true tras recibir READY al menos una vez */
+  firmwareReady = false;
+  /** Ultima linea de estado recibida del firmware (para UI/debug) */
+  firmwareStatus = '';
+  /** Estado visible del boton/chip, derivado del resto de flags. */
+  btPhase: 'idle' | 'connecting' | 'awaiting-fw' | 'ready' | 'sending' | 'frame-ok' | 'error' = 'idle';
   private btStatusSub?: Subscription;
   private btNameSub?: Subscription;
+  private fwSub?: Subscription;
+  private phaseResetTimer?: any;
 
   constructor(private bt: BluetoothService) {}
 
@@ -238,10 +247,46 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     this.btMode = this.bt.getMode();
     this.btStatusSub = this.bt.status$.subscribe((s) => {
       this.arduinoConnected = s === 'connected';
+      if (s === 'connecting') {
+        this.btPhase = 'connecting';
+      } else if (s === 'connected') {
+        this.btPhase = this.firmwareReady ? 'ready' : 'awaiting-fw';
+      } else {
+        this.btPhase = this.btError ? 'error' : 'idle';
+        this.firmwareReady = false;
+        this.firmwareStatus = '';
+      }
     });
     this.btNameSub = this.bt.deviceName$.subscribe((n) => {
       this.portName = n;
     });
+    // Feedback real del Arduino (READY/ACK/NAK). Sin esto la app no tenia
+    // forma de saber si la comunicacion funcionaba.
+    this.fwSub = this.bt.firmware$.subscribe((ev: FirmwareEvent) => {
+      this.onFirmwareEvent(ev);
+    });
+
+    // Solicitar permisos al arrancar y precargar el HC-05 emparejado si existe.
+    // Pequeño retardo para dar tiempo a Cordova/deviceready a inyectar
+    // window.bluetoothSerial en la webview.
+    setTimeout(() => this.autoInitBluetooth(), 400);
+  }
+
+  private async autoInitBluetooth() {
+    this.btMode = this.bt.refreshMode();
+    if (this.btMode !== 'bluetooth') return;
+    try {
+      await this.bt.requestPermissions();
+      const devices = await this.bt.listPaired();
+      this.btDevices = devices;
+      this.preferredDevice = this.bt.pickPreferred(devices);
+      if (this.preferredDevice) {
+        this.portName = this.preferredDevice.name;
+      }
+    } catch (e: any) {
+      console.warn('[BT] auto-init:', e?.message);
+      this.btError = e?.message || '';
+    }
   }
 
   ngAfterViewInit() {
@@ -257,6 +302,57 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   ngOnDestroy() {
     this.btStatusSub?.unsubscribe();
     this.btNameSub?.unsubscribe();
+    this.fwSub?.unsubscribe();
+  }
+
+  private onFirmwareEvent(ev: FirmwareEvent) {
+    switch (ev.kind) {
+      case 'ready':
+        this.firmwareReady = true;
+        this.firmwareStatus = 'Arduino listo';
+        this.btError = '';
+        if (this.arduinoConnected) this.setPhase('ready');
+        break;
+      case 'ack':
+        this.firmwareStatus = 'Frame enviado correctamente';
+        this.setPhase('frame-ok');
+        // Volver a "ready" tras 2s para no quedarnos en el estado de exito.
+        clearTimeout(this.phaseResetTimer);
+        this.phaseResetTimer = setTimeout(() => {
+          if (this.arduinoConnected && this.firmwareReady) this.setPhase('ready');
+        }, 2000);
+        break;
+      case 'nak':
+        this.firmwareStatus = 'NAK del firmware: ' + ev.reason;
+        this.btError = 'El Arduino rechazo la trama (' + ev.reason + '). Reintenta el envio.';
+        this.setPhase('error');
+        break;
+      case 'other':
+        // Ignorado para UI, pero util en logs.
+        console.log('[FW]', ev.line);
+        break;
+    }
+  }
+
+  private setPhase(p: HomePage['btPhase']) {
+    this.btPhase = p;
+  }
+
+  // Textos y colores derivados del btPhase (getter para el template).
+  get phaseLabel(): string {
+    switch (this.btPhase) {
+      case 'connecting':   return 'Conectando...';
+      case 'awaiting-fw':  return 'Esperando Arduino...';
+      case 'ready':        return 'Listo';
+      case 'sending':      return 'Enviando trama...';
+      case 'frame-ok':     return 'Trama enviada';
+      case 'error':        return 'Error';
+      default:             return 'Sin conexion';
+    }
+  }
+
+  get phaseBusy(): boolean {
+    return this.btPhase === 'connecting' || this.btPhase === 'awaiting-fw' || this.btPhase === 'sending';
   }
 
   // ─── GRID ────────────────────────────────────────────────────────────────
@@ -557,7 +653,20 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     }
     this.btError = '';
     if (this.btMode === 'bluetooth') {
-      // Android: abrimos selector de dispositivos emparejados
+      // Si tenemos un HC-05/06 preferido (ultimo usado o emparejado), intentamos
+      // conectar directo sin pasar por el picker. Si falla, lo abrimos.
+      if (this.preferredDevice) {
+        try {
+          await this.bt.requestPermissions();
+          await this.bt.connect(this.preferredDevice.address);
+          this.portName = this.preferredDevice.name;
+          this.bt.rememberDevice(this.preferredDevice);
+          return;
+        } catch (e: any) {
+          console.warn('[BT] auto-connect fallo, abriendo picker:', e?.message);
+          this.btError = e?.message || '';
+        }
+      }
       this.showDevicePicker = true;
       await this.refreshDevices();
     } else if (this.btMode === 'serial') {
@@ -577,6 +686,7 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     this.btError = '';
     try {
       this.btDevices = await this.bt.listPaired();
+      this.preferredDevice = this.bt.pickPreferred(this.btDevices);
       if (this.btDevices.length === 0) {
         this.btError = 'No hay dispositivos emparejados. Empareja el HC-05/06 desde Ajustes > Bluetooth.';
       }
@@ -587,11 +697,31 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  async reloadPermissions() {
+    this.btError = '';
+    this.btScanning = true;
+    try {
+      this.btMode = this.bt.refreshMode();
+      await this.bt.requestPermissions();
+      this.btDevices = await this.bt.listPaired();
+      this.preferredDevice = this.bt.pickPreferred(this.btDevices);
+      if (this.btDevices.length === 0) {
+        this.btError = 'Permisos concedidos, pero no hay dispositivos emparejados. Empareja el HC-05/06 desde Ajustes > Bluetooth.';
+      }
+    } catch (e: any) {
+      this.btError = e?.message || 'No se pudieron obtener los permisos';
+    } finally {
+      this.btScanning = false;
+    }
+  }
+
   async connectToDevice(device: BtDevice) {
     this.btError = '';
     try {
       await this.bt.connect(device.address);
       this.portName = device.name;
+      this.preferredDevice = device;
+      this.bt.rememberDevice(device);
       this.showDevicePicker = false;
     } catch (e: any) {
       this.btError = e?.message || 'No se pudo conectar';
@@ -610,6 +740,8 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     if (!this.arduinoConnected) return;
     this.sending = true;
     this.sendProgress = 0;
+    this.btError = '';
+    this.setPhase('sending');
     try {
       // Protocolo: [0xFF,0xFE,0xFD] + R,G,B x (96x24) + [0xFD,0xFE,0xFF]
       const total = 3 + ROWS * COLS * 3 + 3;
@@ -624,17 +756,21 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
       }
       buf[i++] = 0xFD; buf[i++] = 0xFE; buf[i++] = 0xFF;
 
+      // Los defaults del servicio ya estan ajustados segun plataforma
+      // (chunk=64/delay=70ms para BT; chunk=256/sin delay para Web Serial).
+      this.firmwareStatus = 'Enviando trama...';
       await this.bt.write(buf, {
-        chunkSize: 256,
-        chunkDelayMs: this.btMode === 'bluetooth' ? 10 : 0,
         onProgress: (sent, t) => {
           this.sendProgress = Math.round((sent / t) * 100);
         },
       });
       this.sendProgress = 100;
+      this.firmwareStatus = 'Trama enviada. Esperando ACK...';
     } catch (e: any) {
       console.error('Error enviando:', e?.message);
       this.btError = e?.message || 'Error enviando frame';
+      this.firmwareStatus = 'Error enviando';
+      this.setPhase('error');
     } finally {
       this.sending = false;
       setTimeout(() => { this.sendProgress = 0; }, 1500);
