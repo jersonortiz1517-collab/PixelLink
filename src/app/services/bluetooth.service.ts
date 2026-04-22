@@ -32,6 +32,9 @@ export class BluetoothService {
   private serialReader: any = null;
   private serialReaderTask: Promise<void> | null = null;
   private rxLineBuf = '';
+  private permissionsOk = false;
+  private pairedCache: { devices: BtDevice[]; ts: number } | null = null;
+  private static readonly PAIRED_TTL_MS = 5000;
 
   constructor() {
     this.mode = this.detectMode();
@@ -47,17 +50,16 @@ export class BluetoothService {
   isSupported(): boolean { return this.mode !== 'none'; }
   refreshMode(): 'bluetooth' | 'serial' | 'none' { this.mode = this.detectMode(); return this.mode; }
 
-  async requestPermissions(): Promise<void> {
+  async requestPermissions(force: boolean = false): Promise<void> {
     this.refreshMode();
     if (this.mode !== 'bluetooth') throw new Error('Bluetooth nativo no disponible en esta plataforma');
+    if (this.permissionsOk && !force) return;
     const bt = window.bluetoothSerial;
     await new Promise<void>((resolve, reject) => {
       bt.isEnabled(() => resolve(),
         () => { bt.enable(() => resolve(), (err: any) => reject(this.toPermError(err))); });
     });
-    await new Promise<void>((resolve, reject) => {
-      bt.list(() => resolve(), (err: any) => reject(this.toPermError(err)));
-    });
+    this.permissionsOk = true;
   }
 
   private toPermError(err: any): Error {
@@ -91,23 +93,30 @@ export class BluetoothService {
     try { localStorage?.setItem('pixellink.lastMac', device.address); } catch (_) {}
   }
 
-  async listPaired(): Promise<BtDevice[]> {
+  async listPaired(opts: { force?: boolean } = {}): Promise<BtDevice[]> {
     this.refreshMode();
     if (this.mode !== 'bluetooth') return [];
+    if (!opts.force && this.pairedCache && (Date.now() - this.pairedCache.ts) < BluetoothService.PAIRED_TTL_MS) {
+      return this.pairedCache.devices;
+    }
     const bt = window.bluetoothSerial;
-    await new Promise<void>((resolve, reject) => {
-      bt.isEnabled(() => resolve(),
-        () => bt.enable(() => resolve(), (err: any) => reject(this.toPermError(err))));
-    });
-    return new Promise<BtDevice[]>((resolve, reject) => {
-      bt.list((devices: any[]) => {
-        const mapped: BtDevice[] = (devices || []).map((d) => ({
+    if (!this.permissionsOk) {
+      await new Promise<void>((resolve, reject) => {
+        bt.isEnabled(() => resolve(),
+          () => bt.enable(() => resolve(), (err: any) => reject(this.toPermError(err))));
+      });
+    }
+    const devices = await new Promise<BtDevice[]>((resolve, reject) => {
+      bt.list((raw: any[]) => {
+        const mapped: BtDevice[] = (raw || []).map((d) => ({
           address: d.address || d.id,
           name: d.name || d.address || 'Desconocido',
         }));
         resolve(mapped);
       }, (err: any) => reject(this.toPermError(err)));
     });
+    this.pairedCache = { devices, ts: Date.now() };
+    return devices;
   }
 
   async connect(address?: string, baudRate: number = 115200): Promise<void> {
@@ -120,12 +129,16 @@ export class BluetoothService {
           new Promise<void>((resolve, reject) => {
             bt[fn](address, () => resolve(), (err: any) => reject(this.toConnError(err, fn)));
           });
-        try { await tryConnect('connect'); }
-        catch (primary) {
-          console.warn('[BT] connect fallo, reintentando connectInsecure:', primary);
-          try { await tryConnect('connectInsecure'); }
+        // Para HC-05/06 el socket SPP rechaza con frecuencia el emparejamiento seguro;
+        // connectInsecure funciona en la mayoria de modulos y suele ser mas rapido.
+        try { await tryConnect('connectInsecure'); }
+        catch (primary: any) {
+          // Si es un error de permisos, no tiene sentido reintentar: fallara igual.
+          if (/permission/i.test(primary?.message || '')) throw primary;
+          console.warn('[BT] connectInsecure fallo, reintentando connect:', primary?.message);
+          try { await tryConnect('connect'); }
           catch (secondary) {
-            console.error('[BT] connectInsecure tambien fallo:', secondary);
+            console.error('[BT] connect tambien fallo:', secondary);
             throw secondary;
           }
         }
@@ -140,7 +153,10 @@ export class BluetoothService {
         throw new Error('No hay transporte Bluetooth ni Web Serial disponible');
       }
       this.status$.next('connected');
-      setTimeout(() => { this.probeFirmware().catch(() => {}); }, 200);
+      // En Web Serial, abrir el puerto togglea DTR y resetea al Arduino;
+      // esperamos ~1.5s antes de sondear para que el firmware este listo.
+      const probeDelay = this.mode === 'serial' ? 1500 : 0;
+      setTimeout(() => { this.probeFirmware().catch(() => {}); }, probeDelay);
     } catch (e) {
       this.status$.next('disconnected');
       this.deviceName$.next('');
@@ -230,6 +246,7 @@ export class BluetoothService {
       }
     } finally {
       this.rxLineBuf = '';
+      this.pairedCache = null;
       this.status$.next('disconnected');
       this.deviceName$.next('');
     }

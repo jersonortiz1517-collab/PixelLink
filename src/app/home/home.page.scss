@@ -360,6 +360,39 @@ ion-toolbar.main-toolbar {
 
 .checkbox-ctrl input { accent-color: var(--accent); cursor: pointer; }
 
+.ctrl-fit-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  border-radius: 5px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-left: 4px;
+  transition: border-color 0.12s, color 0.12s;
+  ion-icon { font-size: 14px; }
+  &:hover { border-color: var(--accent); color: var(--accent); }
+}
+
+.size-ctrl { cursor: default; }
+.size-select {
+  background: var(--bg-deep);
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: monospace;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.12s;
+  &:hover, &:focus { border-color: var(--accent); }
+  option { background: var(--bg-panel); color: var(--text-1); }
+}
+
 .ctrl-divider {
   width: 1px;
   height: 14px;
@@ -790,10 +823,10 @@ ion-toolbar.main-toolbar {
 /* ── Modal selector BT ─────────────────────────────────────────────────── */
 .bt-modal-backdrop {
   position: fixed; inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
+  background: rgba(5, 5, 15, 0.78);
   display: flex; align-items: center; justify-content: center;
   z-index: 1000;
+  contain: layout paint;
 }
 .bt-modal {
   width: min(420px, 92vw);
@@ -802,9 +835,12 @@ ion-toolbar.main-toolbar {
   color: #f5f5f7;
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 14px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.55);
   overflow: hidden;
   display: flex; flex-direction: column;
+  transform: translateZ(0);
+  will-change: transform;
+  contain: layout paint;
 }
 .bt-modal-header {
   padding: 14px 16px;
@@ -883,4 +919,146 @@ ion-toolbar.main-toolbar {
   cursor: pointer;
   &:hover:not(:disabled) { background: rgba(0, 212, 255, 0.2); }
   &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+// ── Boton flotante + drawer movil ─────────────────────────────
+.mobile-panel-toggle {
+  display: none; // solo visible en movil via media query
+}
+.mobile-panel-backdrop {
+  display: none;
+}
+
+// ── RESPONSIVE: movil y tablet en vertical ────────────────────
+@media (max-width: 820px) {
+  // Toolbar mas compacta
+  .toolbar-inner {
+    padding: 0 6px;
+    gap: 4px;
+    .matrix-badge { display: none; }
+    .logo-pixel, .logo-link { font-size: 15px; }
+  }
+  .toolbar-actions { gap: 4px; }
+  .btn-connect {
+    min-width: 36px;
+    padding: 5px 8px;
+    span { display: none; }       // solo el icono + estado
+    ion-icon { font-size: 17px; }
+  }
+  .btn-send {
+    padding: 6px 10px;
+    min-width: 36px;
+    span { display: none; }
+  }
+  .btn-icon { width: 28px; height: 28px; font-size: 14px; }
+
+  // Tools panel horizontal arriba del canvas
+  .editor-container { flex-direction: column; }
+  .tools-panel {
+    width: 100%;
+    min-height: 48px;
+    flex-direction: row;
+    justify-content: center;
+    padding: 6px;
+    gap: 4px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    &::-webkit-scrollbar { display: none; }
+  }
+  .tools-group {
+    flex-direction: row;
+    gap: 3px;
+  }
+  .tools-divider {
+    width: 1px;
+    height: 24px;
+    margin: 0 4px;
+  }
+  .tool-btn { width: 34px; height: 34px; font-size: 17px; }
+  .side-color-preview {
+    margin: 0 0 0 auto;
+    width: 26px;
+    height: 26px;
+  }
+
+  // El area del canvas ocupa todo el ancho
+  .canvas-area { min-height: 0; }
+  .canvas-scroll { padding: 8px; }
+  .canvas-controls {
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    padding: 6px 10px;
+    font-size: 11px;
+    .cursor-pos { display: none; }
+    .ctrl-divider { display: none; }
+  }
+  .size-select { padding: 4px 6px; font-size: 11px; }
+  .ctrl-range { width: 100px; }
+
+  // Panel derecho -> drawer inferior
+  .right-panel {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-height: 72vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    transform: translateY(100%);
+    transition: transform 0.25s ease;
+    box-shadow: 0 -8px 24px rgba(0,0,0,0.5);
+    z-index: 900;
+    &.open { transform: translateY(0); }
+  }
+  .mobile-panel-toggle {
+    display: inline-flex;
+    position: fixed;
+    bottom: 14px;
+    right: 14px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 1px solid var(--accent);
+    background: var(--bg-card);
+    color: var(--accent);
+    font-size: 22px;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 950;
+    box-shadow: 0 4px 14px rgba(0, 212, 255, 0.35);
+    transition: transform 0.15s, background 0.15s;
+    ion-icon { font-size: 24px; }
+    &.active {
+      background: var(--accent);
+      color: #0d0d1a;
+    }
+    &:active { transform: scale(0.94); }
+  }
+  .mobile-panel-backdrop {
+    display: block;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 890;
+  }
+
+  // Shapes mas compactos y palette mas grande para dedos
+  .shapes-grid { grid-template-columns: repeat(3, 1fr); }
+  .pal-cell { aspect-ratio: 1; }
+  .palette-grid { grid-template-columns: repeat(10, 1fr); }
+}
+
+// Pantallas muy estrechas (celulares chicos)
+@media (max-width: 400px) {
+  .toolbar-inner .matrix-badge { display: none; }
+  .logo-pixel, .logo-link { font-size: 13px; }
+  .btn-icon { width: 26px; height: 26px; }
+  .btn-connect, .btn-send { height: 28px; }
+  .canvas-scroll { padding: 4px; }
+  .size-select { padding: 3px 5px; font-size: 10px; }
 }

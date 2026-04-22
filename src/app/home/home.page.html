@@ -5,7 +5,7 @@
       <!-- Logo -->
       <div class="logo">
         <span class="logo-pixel">Pixel</span><span class="logo-link">Link</span>
-        <span class="matrix-badge">96 x 24 RGB</span>
+        <span class="matrix-badge">{{ matrixCols }} x {{ matrixRows }}</span>
       </div>
 
       <!-- Acciones -->
@@ -81,12 +81,11 @@
         </button>
       </div>
 
-      <div class="side-color-preview" [style.background]="currentColor" [style.box-shadow]="'0 0 10px ' + currentColor" title="Color activo"></div>
     </aside>
 
     <!-- Centro: Canvas -->
     <main class="canvas-area">
-      <div class="canvas-scroll">
+      <div #canvasScroll class="canvas-scroll">
         <canvas
           #ledCanvas
           class="led-canvas"
@@ -101,14 +100,36 @@
       </div>
 
       <div class="canvas-controls">
+        <label class="ctrl-item size-ctrl">
+          <span class="ctrl-label">Matriz</span>
+          <select
+            class="size-select"
+            [ngModel]="currentPresetId"
+            (ngModelChange)="setMatrixPreset($event)"
+            title="Tamano de la matriz">
+            @for (p of matrixPresets; track p.id) {
+              <option [value]="p.id">{{ p.label }}</option>
+            }
+          </select>
+        </label>
+
+        <div class="ctrl-divider"></div>
+
         <label class="ctrl-item">
           <span class="ctrl-label">Zoom</span>
           <input
-            type="range" min="3" max="16" step="1"
+            type="range" min="2" max="32" step="1"
             [(ngModel)]="cellSize"
             (input)="onCellSizeChange()"
             class="ctrl-range">
           <span class="ctrl-value">{{ cellSize }}px</span>
+          <button
+            type="button"
+            class="ctrl-fit-btn"
+            (click)="fitCanvasToContainer()"
+            title="Ajustar al espacio disponible">
+            <ion-icon name="expand-outline"></ion-icon>
+          </button>
         </label>
 
         <label class="ctrl-item checkbox-ctrl">
@@ -136,37 +157,23 @@
       }
     </main>
 
+    <!-- Boton flotante (solo visible en movil) para abrir el panel -->
+    <button
+      type="button"
+      class="mobile-panel-toggle"
+      [class.active]="mobilePanelOpen"
+      (click)="mobilePanelOpen = !mobilePanelOpen"
+      aria-label="Abrir opciones">
+      <ion-icon [name]="mobilePanelOpen ? 'close-circle-outline' : 'options-outline'"></ion-icon>
+    </button>
+
+    <!-- Backdrop del drawer en movil -->
+    @if (mobilePanelOpen) {
+      <div class="mobile-panel-backdrop" (click)="mobilePanelOpen = false"></div>
+    }
+
     <!-- Panel derecho: Color + Figuras + Arduino -->
-    <aside class="right-panel">
-
-      <section class="panel-section">
-        <h4 class="section-title">Color activo</h4>
-        <div class="color-row">
-          <div
-            class="color-swatch-lg"
-            [style.background]="currentColor"
-            [style.box-shadow]="'0 0 14px ' + currentColor">
-          </div>
-          <input type="color" class="color-native" [(ngModel)]="currentColor" title="Selector de color">
-          <input
-            type="text"
-            class="color-hex"
-            [(ngModel)]="currentColor"
-            maxlength="7"
-            placeholder="#000000">
-        </div>
-
-        <div class="palette-grid">
-          <button
-            *ngFor="let c of palette"
-            class="pal-cell"
-            [style.background]="c"
-            [class.pal-active]="currentColor.toLowerCase() === c.toLowerCase()"
-            (click)="currentColor = c"
-            [attr.title]="c">
-          </button>
-        </div>
-      </section>
+    <aside class="right-panel" [class.open]="mobilePanelOpen">
 
       <section class="panel-section">
         <h4 class="section-title">Figuras de referencia</h4>

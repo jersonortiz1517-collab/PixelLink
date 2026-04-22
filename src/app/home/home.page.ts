@@ -10,17 +10,23 @@ import {
   pencilOutline, squareOutline, ellipseOutline, removeOutline,
   colorFillOutline, trashOutline, sendOutline,
   arrowUndoOutline, arrowRedoOutline, bluetoothOutline, bluetooth,
-  removeCircleOutline, colorWandOutline, refreshOutline, closeCircleOutline
+  removeCircleOutline, refreshOutline, closeCircleOutline,
+  expandOutline, optionsOutline
 } from 'ionicons/icons';
 import { BluetoothService, BtDevice, FirmwareEvent } from '../services/bluetooth.service';
 import { Subscription } from 'rxjs';
 
-const ROWS = 24;
-const COLS = 96;
+// Dimensiones del frame que espera el firmware (fijo). Al enviar se reescala
+// desde el tamano actual de edicion a esta resolucion.
+const PROTO_ROWS = 24;
+const PROTO_COLS = 96;
 const MAX_HISTORY = 20;
 const BLACK = '#000000';
+// Color unico del lapiz. La matriz MAX7219 es monocroma (LEDs rojos), asi
+// que en la app trabajamos en rojo/negro y al enviar binarizamos.
+const ON_COLOR = '#ff0000';
 
-type ToolId = 'pencil' | 'eraser' | 'rect' | 'circle' | 'line' | 'fill' | 'eyedropper';
+type ToolId = 'pencil' | 'eraser' | 'rect' | 'circle' | 'line' | 'fill';
 
 interface ShapeDef {
   id: string;
@@ -28,6 +34,13 @@ interface ShapeDef {
   color: string;
   pattern: string[];
   previewUrl?: string;
+}
+
+interface MatrixPreset {
+  id: string;
+  label: string;
+  rows: number;
+  cols: number;
 }
 
 @Component({
@@ -38,11 +51,12 @@ interface ShapeDef {
 })
 export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('ledCanvas', { static: false }) canvasRef!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('canvasScroll', { static: false }) scrollRef?: ElementRef<HTMLDivElement>;
 
   grid: string[][] = [];
   isDrawing = false;
   activeTool: ToolId = 'pencil';
-  currentColor = '#ff2d55';
+  readonly currentColor = ON_COLOR;
   cellSize = 8;
   showGrid = true;
   startCell = { row: 0, col: 0 };
@@ -50,11 +64,24 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   history: string[][][] = [];
   historyIndex = -1;
 
+  // Tamano actual del lienzo. Presets basados en multiplos del modulo fisico
+  // (32x8). El envio siempre reescala a 96x24 (lo que espera el firmware).
+  matrixRows = 8;
+  matrixCols = 32;
+  matrixPresets: MatrixPreset[] = [
+    { id: 'x1', label: 'x1  (32 x 8)',  rows: 8,  cols: 32 },
+    { id: 'x2', label: 'x2  (64 x 16)', rows: 16, cols: 64 },
+    { id: 'x3', label: 'x3  (96 x 24)', rows: 24, cols: 96 },
+  ];
+  currentPresetId: string = 'x1';
+
   arduinoConnected = false;
   portName = '';
   baudRate = '115200';
   sending = false;
   sendProgress = 0;
+  /** Panel derecho abierto como drawer en movil. */
+  mobilePanelOpen = false;
   private ctx!: CanvasRenderingContext2D;
 
   // Bluetooth UI state
@@ -78,25 +105,19 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   constructor(private bt: BluetoothService) {}
 
   tools: { id: ToolId; icon: string; label: string; key: string }[] = [
-    { id: 'pencil',     icon: 'pencil-outline',        label: 'Lápiz',       key: 'P' },
-    { id: 'eraser',     icon: 'remove-circle-outline', label: 'Borrador',    key: 'E' },
-    { id: 'rect',       icon: 'square-outline',        label: 'Rectángulo',  key: 'R' },
-    { id: 'circle',     icon: 'ellipse-outline',       label: 'Círculo',     key: 'C' },
-    { id: 'line',       icon: 'remove-outline',        label: 'Línea',       key: 'L' },
-    { id: 'fill',       icon: 'color-fill-outline',    label: 'Relleno',     key: 'F' },
-    { id: 'eyedropper', icon: 'color-wand-outline',    label: 'Cuentagotas', key: 'I' },
+    { id: 'pencil', icon: 'pencil-outline',        label: 'Lápiz',      key: 'P' },
+    { id: 'eraser', icon: 'remove-circle-outline', label: 'Borrador',   key: 'E' },
+    { id: 'rect',   icon: 'square-outline',        label: 'Rectángulo', key: 'R' },
+    { id: 'circle', icon: 'ellipse-outline',       label: 'Círculo',    key: 'C' },
+    { id: 'line',   icon: 'remove-outline',        label: 'Línea',      key: 'L' },
+    { id: 'fill',   icon: 'color-fill-outline',    label: 'Relleno',    key: 'F' },
   ];
 
-  palette = [
-    '#ff0000', '#ff4400', '#ff8800', '#ffcc00', '#ffff00',
-    '#88ff00', '#00ff00', '#00ff88', '#00ffff', '#0088ff',
-    '#0000ff', '#8800ff', '#ff00ff', '#ff0088', '#ff3b30',
-    '#ffffff', '#aaaaaa', '#555555', '#222222', '#00d4ff',
-  ];
-
+  // Formas simples, pensadas para caber en la matriz mas pequena (32 x 8).
+  // Todas son <= 8 filas y <= 8 columnas, asi entran en cualquier preset.
   referenceShapes: ShapeDef[] = [
     {
-      id: 'heart', name: 'Corazón', color: '#ff2d55',
+      id: 'heart', name: 'Corazón', color: ON_COLOR,
       pattern: [
         '.XX.XX.',
         'XXXXXXX',
@@ -107,109 +128,71 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
       ]
     },
     {
-      id: 'star', name: 'Estrella', color: '#ffd60a',
+      id: 'star', name: 'Estrella', color: ON_COLOR,
       pattern: [
         '...X...',
-        '.XXXXX.',
+        '...X...',
         'XXXXXXX',
-        '..XXX..',
-        '.X.X.X.',
-        'X.....X',
+        '.XXXXX.',
+        '..X.X..',
+        '.X...X.',
       ]
     },
     {
-      id: 'arrow', name: 'Flecha →', color: '#30d158',
+      id: 'arrow-r', name: 'Flecha →', color: ON_COLOR,
       pattern: [
-        '..XX....',
-        '.....X..',
+        '...X....',
+        '....X...',
         'XXXXXXXX',
-        '.....X..',
-        '..XX....',
+        '....X...',
+        '...X....',
       ]
     },
     {
-      id: 'smiley', name: 'Carita :)', color: '#ffd60a',
+      id: 'arrow-l', name: 'Flecha ←', color: ON_COLOR,
       pattern: [
-        '.XXXXXX.',
-        'X......X',
-        'X.X..X.X',
-        'X......X',
-        'X.XXXX.X',
-        'X......X',
-        '.XXXXXX.',
+        '....X...',
+        '...X....',
+        'XXXXXXXX',
+        '...X....',
+        '....X...',
       ]
     },
     {
-      id: 'lightning', name: 'Rayo', color: '#ffd60a',
+      id: 'smiley', name: 'Carita :)', color: ON_COLOR,
       pattern: [
-        '...XXXX',
-        '..XX...',
-        '.XXXXXX',
-        'XX.....',
-        'XXXXX..',
-        '..XX...',
-        '...X...',
+        '.XXXX.',
+        'X....X',
+        'X.XX.X',
+        'X....X',
+        'XX..XX',
+        '.XXXX.',
       ]
     },
     {
-      id: 'minecraft', name: 'MINECRAFT', color: '#4a8f3f',
-      pattern: (() => {
-        const lm: Record<string, string[]> = {
-          M: ['X...X','XX.XX','X.X.X','X...X','X...X'],
-          I: ['.XXX.','..X..','..X..','..X..','.XXX.'],
-          N: ['X...X','XX..X','X.X.X','X..XX','X...X'],
-          E: ['XXXXX','X....','XXXX.','X....','XXXXX'],
-          C: ['.XXXX','X....','X....','X....', '.XXXX'],
-          R: ['XXXX.','X...X','XXXX.','X.X..','X..XX'],
-          A: ['..X..','.X.X.','XXXXX','X...X','X...X'],
-          F: ['XXXXX','X....','XXXX.','X....','X....'],
-          T: ['XXXXX','..X..','..X..','..X..','..X..'],
-        };
-        const word = 'MINECRAFT';
-        const lw = 5, lh = 5, sp = 2;
-        const totalW = word.length * lw + (word.length - 1) * sp; // 61
-        const sC = Math.floor((COLS - totalW) / 2);               // 17
-        const sR = Math.floor((ROWS - lh) / 2);                   // 9
-        return Array.from({ length: ROWS }, (_, r) => {
-          const row = Array(COLS).fill('.');
-          const lr = r - sR;
-          if (lr >= 0 && lr < lh) {
-            [...word].forEach((ch, li) => {
-              const cStart = sC + li * (lw + sp);
-              [...lm[ch][lr]].forEach((px, lc) => {
-                if (px === 'X') row[cStart + lc] = 'X';
-              });
-            });
-          }
-          return row.join('');
-        });
-      })()
-    },
-    {
-      id: 'checkerboard', name: 'Tablero', color: '#ffffff',
+      id: 'circle', name: 'Círculo', color: ON_COLOR,
       pattern: [
-        'X.X.X.X.',
-        '.X.X.X.X',
-        'X.X.X.X.',
-        '.X.X.X.X',
-        'X.X.X.X.',
-        '.X.X.X.X',
-        'X.X.X.X.',
-        '.X.X.X.X',
+        '.XXXX.',
+        'XXXXXX',
+        'XXXXXX',
+        'XXXXXX',
+        'XXXXXX',
+        '.XXXX.',
       ]
     },
     {
-      id: 'text_hi', name: 'Texto HI', color: '#00d4ff',
+      id: 'square', name: 'Cuadrado', color: ON_COLOR,
       pattern: [
-        'X...X..X.',
-        'X...X..X.',
-        'XXXXX..X.',
-        'X...X..X.',
-        'X...X..X.',
+        'XXXXXX',
+        'X....X',
+        'X....X',
+        'X....X',
+        'X....X',
+        'XXXXXX',
       ]
     },
     {
-      id: 'diamond', name: 'Diamante', color: '#bf5af2',
+      id: 'diamond', name: 'Diamante', color: ON_COLOR,
       pattern: [
         '...X...',
         '..XXX..',
@@ -221,15 +204,24 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
       ]
     },
     {
-      id: 'pacman', name: 'Pac-Man', color: '#ffd60a',
+      id: 'cross', name: 'Cruz X', color: ON_COLOR,
       pattern: [
-        '.XXXXX.',
-        'XXXXXXX',
-        'XXXXX..',
-        'XXXX...',
-        'XXXXX..',
-        'XXXXXXX',
-        '.XXXXX.',
+        'X...X',
+        '.X.X.',
+        '..X..',
+        '.X.X.',
+        'X...X',
+      ]
+    },
+    {
+      id: 'lightning', name: 'Rayo', color: ON_COLOR,
+      pattern: [
+        '...XX',
+        '..XX.',
+        '.XXXX',
+        'XX...',
+        '.XX..',
+        '.X...',
       ]
     },
   ];
@@ -239,7 +231,8 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
       pencilOutline, squareOutline, ellipseOutline, removeOutline,
       colorFillOutline, trashOutline, sendOutline,
       arrowUndoOutline, arrowRedoOutline, bluetoothOutline, bluetooth,
-      removeCircleOutline, colorWandOutline, refreshOutline, closeCircleOutline,
+      removeCircleOutline, refreshOutline, closeCircleOutline,
+      expandOutline, optionsOutline,
     });
     this.initGrid();
     this.saveHistory();
@@ -292,11 +285,16 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   ngAfterViewInit() {
     const canvas = this.canvasRef.nativeElement;
     this.ctx = canvas.getContext('2d')!;
-    this.resizeCanvas();
-    this.render();
+    // Espera un tick para que el contenedor tenga dimensiones medibles.
+    setTimeout(() => this.fitCanvasToContainer(), 0);
     setTimeout(() => {
       this.referenceShapes.forEach(s => { s.previewUrl = this.generateShapePreview(s); });
     }, 50);
+  }
+
+  @HostListener('window:resize')
+  onWindowResize() {
+    this.fitCanvasToContainer();
   }
 
   ngOnDestroy() {
@@ -358,14 +356,66 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   // ─── GRID ────────────────────────────────────────────────────────────────
 
   initGrid() {
-    this.grid = Array.from({ length: ROWS }, () => Array(COLS).fill(BLACK));
+    this.grid = Array.from({ length: this.matrixRows }, () => Array(this.matrixCols).fill(BLACK));
   }
 
   resizeCanvas() {
     const canvas = this.canvasRef.nativeElement;
     const g = this.showGrid ? 1 : 0;
-    canvas.width  = COLS * (this.cellSize + g) + g;
-    canvas.height = ROWS * (this.cellSize + g) + g;
+    canvas.width  = this.matrixCols * (this.cellSize + g) + g;
+    canvas.height = this.matrixRows * (this.cellSize + g) + g;
+  }
+
+  /** Cambia el tamano del lienzo conservando el dibujo CENTRADO. */
+  setMatrixPreset(presetId: string) {
+    const p = this.matrixPresets.find((x) => x.id === presetId);
+    if (!p || (p.rows === this.matrixRows && p.cols === this.matrixCols)) return;
+    const prev = this.grid;
+    const prevRows = prev.length;
+    const prevCols = prev[0]?.length || 0;
+    // Offset para centrar el contenido anterior en el nuevo lienzo
+    // (negativo = recorte desde el centro al reducir).
+    const offR = Math.floor((p.rows - prevRows) / 2);
+    const offC = Math.floor((p.cols - prevCols) / 2);
+    const next: string[][] = Array.from({ length: p.rows }, (_, r) =>
+      Array.from({ length: p.cols }, (_, c) => {
+        const sr = r - offR, sc = c - offC;
+        return (sr >= 0 && sr < prevRows && sc >= 0 && sc < prevCols)
+          ? prev[sr][sc] : BLACK;
+      })
+    );
+    this.matrixRows = p.rows;
+    this.matrixCols = p.cols;
+    this.currentPresetId = p.id;
+    this.grid = next;
+    // El historial previo tenia dimensiones distintas; lo reiniciamos.
+    this.history = [];
+    this.historyIndex = -1;
+    this.saveHistory();
+    this.fitCanvasToContainer();
+  }
+
+  /** Ajusta cellSize para que el lienzo completo quepa en el area visible. */
+  fitCanvasToContainer() {
+    const scrollEl = this.scrollRef?.nativeElement;
+    if (!scrollEl || !this.canvasRef?.nativeElement) {
+      this.resizeCanvas();
+      this.render();
+      return;
+    }
+    // Restamos el padding del contenedor (24px por lado en desktop, 8 en movil).
+    const style = window.getComputedStyle(scrollEl);
+    const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const availW = Math.max(60, scrollEl.clientWidth - padX);
+    const availH = Math.max(60, scrollEl.clientHeight - padY);
+    const g = this.showGrid ? 1 : 0;
+    const byW = Math.floor((availW - g) / this.matrixCols) - g;
+    const byH = Math.floor((availH - g) / this.matrixRows) - g;
+    const size = Math.max(2, Math.min(32, Math.min(byW, byH)));
+    this.cellSize = size;
+    this.resizeCanvas();
+    this.render();
   }
 
   onCellSizeChange() { this.resizeCanvas(); this.render(); }
@@ -381,8 +431,8 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     this.ctx.fillStyle = '#1a1a2e';
     this.ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < this.matrixRows; r++) {
+      for (let c = 0; c < this.matrixCols; c++) {
         const color = grid[r][c];
         this.ctx.fillStyle = color === BLACK ? '#0d0d1a' : color;
         this.ctx.fillRect(g + c * step, g + r * step, this.cellSize, this.cellSize);
@@ -403,12 +453,6 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
       this.saveHistory();
       this.floodFill(cell.row, cell.col, this.currentColor);
       this.render();
-      return;
-    }
-    if (this.activeTool === 'eyedropper') {
-      const c = this.grid[cell.row][cell.col];
-      if (c !== BLACK) this.currentColor = c;
-      this.activeTool = 'pencil';
       return;
     }
 
@@ -490,7 +534,7 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     } else {
       const map: Record<string, ToolId> = {
         p: 'pencil', e: 'eraser', r: 'rect',
-        c: 'circle', l: 'line',   f: 'fill', i: 'eyedropper'
+        c: 'circle', l: 'line',   f: 'fill'
       };
       const tool = map[e.key.toLowerCase()];
       if (tool) this.activeTool = tool;
@@ -508,12 +552,12 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     const step = this.cellSize + g;
     const col = Math.floor(((e.clientX - rect.left) * scaleX) / step);
     const row = Math.floor(((e.clientY - rect.top)  * scaleY) / step);
-    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return null;
+    if (col < 0 || col >= this.matrixCols || row < 0 || row >= this.matrixRows) return null;
     return { row, col };
   }
 
   paintCell(grid: string[][], row: number, col: number, color: string) {
-    if (row >= 0 && row < ROWS && col >= 0 && col < COLS) grid[row][col] = color;
+    if (row >= 0 && row < this.matrixRows && col >= 0 && col < this.matrixCols) grid[row][col] = color;
   }
 
   renderPreview(endRow: number, endCol: number) {
@@ -571,7 +615,7 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     const stack: [number, number][] = [[startRow, startCol]];
     while (stack.length) {
       const [r, c] = stack.pop()!;
-      if (r < 0 || r >= ROWS || c < 0 || c >= COLS || this.grid[r][c] !== oldColor) continue;
+      if (r < 0 || r >= this.matrixRows || c < 0 || c >= this.matrixCols || this.grid[r][c] !== oldColor) continue;
       this.grid[r][c] = newColor;
       stack.push([r + 1, c], [r - 1, c], [r, c + 1], [r, c - 1]);
     }
@@ -583,12 +627,13 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     this.saveHistory();
     const h = shape.pattern.length;
     const w = Math.max(...shape.pattern.map(row => row.length));
-    const startR = Math.max(0, Math.floor((ROWS - h) / 2));
-    const startC = Math.max(0, Math.floor((COLS - w) / 2));
+    const startR = Math.max(0, Math.floor((this.matrixRows - h) / 2));
+    const startC = Math.max(0, Math.floor((this.matrixCols - w) / 2));
+    // Usamos el color activo del lapiz para respetar la eleccion del usuario.
     for (let r = 0; r < h; r++) {
       for (let c = 0; c < shape.pattern[r].length; c++) {
         if (shape.pattern[r][c] === 'X')
-          this.paintCell(this.grid, startR + r, startC + c, shape.color);
+          this.paintCell(this.grid, startR + r, startC + c, this.currentColor);
       }
     }
     this.render();
@@ -667,8 +712,10 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
           this.btError = e?.message || '';
         }
       }
+      // Abrir el modal inmediatamente con la lista cacheada (si existe) para
+      // evitar la espera visible; refrescamos en segundo plano.
       this.showDevicePicker = true;
-      await this.refreshDevices();
+      this.refreshDevices();
     } else if (this.btMode === 'serial') {
       // Escritorio con Web Serial
       try {
@@ -682,10 +729,13 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
   }
 
   async refreshDevices() {
-    this.btScanning = true;
+    // Solo mostramos "Buscando..." si aun no hay nada que mostrar, para que el
+    // modal se sienta instantaneo cuando ya habia lista cacheada.
+    const hadDevices = this.btDevices.length > 0;
+    if (!hadDevices) this.btScanning = true;
     this.btError = '';
     try {
-      this.btDevices = await this.bt.listPaired();
+      this.btDevices = await this.bt.listPaired({ force: true });
       this.preferredDevice = this.bt.pickPreferred(this.btDevices);
       if (this.btDevices.length === 0) {
         this.btError = 'No hay dispositivos emparejados. Empareja el HC-05/06 desde Ajustes > Bluetooth.';
@@ -744,14 +794,28 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
     this.setPhase('sending');
     try {
       // Protocolo: [0xFF,0xFE,0xFD] + R,G,B x (96x24) + [0xFD,0xFE,0xFF]
-      const total = 3 + ROWS * COLS * 3 + 3;
+      // El firmware espera SIEMPRE 96x24. Si el lienzo esta en un tamano
+      // menor, reescalamos por vecino mas cercano al empaquetar.
+      const total = 3 + PROTO_ROWS * PROTO_COLS * 3 + 3;
       const buf = new Uint8Array(total);
       let i = 0;
       buf[i++] = 0xFF; buf[i++] = 0xFE; buf[i++] = 0xFD;
-      for (let r = 0; r < ROWS; r++) {
-        for (let c = 0; c < COLS; c++) {
-          const rgb = this.hexToRgb(this.grid[r][c]);
-          buf[i++] = rgb.r; buf[i++] = rgb.g; buf[i++] = rgb.b;
+      const rowRatio = this.matrixRows / PROTO_ROWS;
+      const colRatio = this.matrixCols / PROTO_COLS;
+      for (let r = 0; r < PROTO_ROWS; r++) {
+        const srcR = Math.min(this.matrixRows - 1, Math.floor(r * rowRatio));
+        for (let c = 0; c < PROTO_COLS; c++) {
+          // Espejo horizontal: el modulo FC-16 encadenado invierte el orden
+          // de columnas respecto a la app. Empaquetamos la columna opuesta
+          // para que "derecha" en el lienzo sea "derecha" en la matriz real.
+          const mirroredC = PROTO_COLS - 1 - c;
+          const srcC = Math.min(this.matrixCols - 1, Math.floor(mirroredC * colRatio));
+          // Binarizamos: cualquier pixel distinto de negro se manda como blanco
+          // puro para asegurar que supere el umbral de luminancia del firmware
+          // (rojo puro daria Y=76, por debajo del umbral 96 y no se encenderia).
+          const on = this.grid[srcR][srcC] !== BLACK;
+          if (on) { buf[i++] = 0xFF; buf[i++] = 0xFF; buf[i++] = 0xFF; }
+          else    { buf[i++] = 0x00; buf[i++] = 0x00; buf[i++] = 0x00; }
         }
       }
       buf[i++] = 0xFD; buf[i++] = 0xFE; buf[i++] = 0xFF;
@@ -765,7 +829,16 @@ export class HomePage implements OnInit, AfterViewInit, OnDestroy {
         },
       });
       this.sendProgress = 100;
-      this.firmwareStatus = 'Trama enviada. Esperando ACK...';
+      // No todos los firmwares emiten ACK (sobre todo en Web Serial, donde el
+      // reset por DTR puede hacer que el primer probe se pierda). Consideramos
+      // la trama entregada al terminar la escritura y volvemos a 'ready' solo.
+      this.firmwareStatus = 'Trama enviada.';
+      this.setPhase('frame-ok');
+      clearTimeout(this.phaseResetTimer);
+      this.phaseResetTimer = setTimeout(() => {
+        if (!this.arduinoConnected) return;
+        this.setPhase(this.firmwareReady ? 'ready' : 'awaiting-fw');
+      }, 2000);
     } catch (e: any) {
       console.error('Error enviando:', e?.message);
       this.btError = e?.message || 'Error enviando frame';
