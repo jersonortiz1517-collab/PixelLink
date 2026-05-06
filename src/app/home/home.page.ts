@@ -108,7 +108,7 @@ export class HomePage {
     try {
       const bytes = Array.from(new TextEncoder().encode(this.mensaje + '\n'));
       const data = numbersToDataView(bytes);
-      await BleClient.writeWithoutResponse(this.deviceId, SERVICE_UUID, CHAR_UUID, data);
+      await BleClient.write(this.deviceId, SERVICE_UUID, CHAR_UUID, data);
       this.estado = 'Enviado: ' + this.mensaje;
       this.mensaje = '';
     } catch (e: any) {
