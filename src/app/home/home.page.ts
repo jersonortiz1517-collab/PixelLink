@@ -37,37 +37,70 @@ export class HomePage {
       this.estado = 'Inicializando BLE...';
       await BleClient.initialize({ androidNeverForLocation: true });
 
-      this.estado = 'Selecciona tu dispositivo...';
-      const device = await BleClient.requestDevice({
-        namePrefix: 'PIXEL',
-        services: [],
-        optionalServices: [SERVICE_UUID],
-        allowDuplicates: false
-      });
+      let deviceId = await this.buscarDispositivoVinculado();
 
-      this.deviceId = device.deviceId;
-      this.estado = 'Conectando...';
+      if (!deviceId) {
+        this.estado = 'Selecciona tu dispositivo...';
+        const device = await BleClient.requestDevice({
+          namePrefix: 'PIXEL',
+          services: [],
+          optionalServices: [SERVICE_UUID],
+          allowDuplicates: false
+        });
+        deviceId = device.deviceId;
+      } else {
+        this.estado = 'Dispositivo vinculado encontrado...';
+      }
 
-      await BleClient.connect(device.deviceId, () => {
-        this.conectado = false;
-        this.estado = 'Desconectado del dispositivo';
-      });
-
-      // Recibir datos del Arduino
-      await BleClient.startNotifications(
-        device.deviceId, SERVICE_UUID, CHAR_UUID,
-        (value) => {
-          const txt = dataViewToText(value);
-          console.log('Recibido:', txt);
-          this.estado = 'RX: ' + txt;
-        }
-      );
-
-      this.conectado = true;
-      this.estado = 'Conectado ✅';
+      await this.conectarA(deviceId);
     } catch (e: any) {
       this.estado = 'Error: ' + (e.message || JSON.stringify(e));
     }
+  }
+
+  private async buscarDispositivoVinculado(): Promise<string | null> {
+    try {
+      const conectados = await BleClient.getConnectedDevices([SERVICE_UUID]);
+      const ya = conectados.find(d => d.name?.toUpperCase().startsWith('PIXEL'));
+      if (ya) return ya.deviceId;
+    } catch {}
+
+    try {
+      const bonded = await (BleClient as any).getBondedDevices?.();
+      if (Array.isArray(bonded)) {
+        const match = bonded.find((d: any) => d.name?.toUpperCase().startsWith('PIXEL'));
+        if (match) return match.deviceId;
+      }
+    } catch {}
+
+    return null;
+  }
+
+  private async conectarA(deviceId: string) {
+    this.deviceId = deviceId;
+    this.estado = 'Conectando...';
+
+    try {
+      await BleClient.connect(deviceId, () => {
+        this.conectado = false;
+        this.estado = 'Desconectado del dispositivo';
+      });
+    } catch (e: any) {
+      const msg = (e?.message || '').toLowerCase();
+      if (!msg.includes('already')) throw e;
+    }
+
+    await BleClient.startNotifications(
+      deviceId, SERVICE_UUID, CHAR_UUID,
+      (value) => {
+        const txt = dataViewToText(value);
+        console.log('Recibido:', txt);
+        this.estado = 'RX: ' + txt;
+      }
+    );
+
+    this.conectado = true;
+    this.estado = 'Conectado ✅';
   }
 
   async enviar() {
