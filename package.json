@@ -9,8 +9,7 @@
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "lint": "ng lint",
-    "build:android": "ng build --output-path=www && npx cap sync android && cd android && ./gradlew assembleDebug"
+    "lint": "ng lint"
   },
   "private": true,
   "dependencies": {
@@ -22,16 +21,14 @@
     "@angular/platform-browser": "^20.0.0",
     "@angular/platform-browser-dynamic": "^20.0.0",
     "@angular/router": "^20.0.0",
-    "@awesome-cordova-plugins/bluetooth-serial": "^9.1.4",
-    "@awesome-cordova-plugins/core": "^9.1.4",
-    "@capacitor/android": "8.3.0",
+    "@capacitor-community/bluetooth-le": "^8.1.3",
+    "@capacitor/android": "^8.3.1",
     "@capacitor/app": "8.1.0",
-    "@capacitor/core": "8.3.0",
+    "@capacitor/core": "8.3.1",
     "@capacitor/haptics": "8.0.2",
     "@capacitor/keyboard": "8.0.3",
     "@capacitor/status-bar": "8.0.2",
     "@ionic/angular": "^8.0.0",
-    "cordova-plugin-bluetooth-serial": "^0.4.7",
     "ionicons": "^7.0.0",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",
@@ -47,7 +44,7 @@
     "@angular/cli": "^20.0.0",
     "@angular/compiler-cli": "^20.0.0",
     "@angular/language-service": "^20.0.0",
-    "@capacitor/cli": "8.3.0",
+    "@capacitor/cli": "8.3.1",
     "@ionic/angular-toolkit": "^12.0.0",
     "@types/jasmine": "~5.1.0",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
@@ -65,13 +62,5 @@
     "karma-jasmine-html-reporter": "~2.1.0",
     "typescript": "~5.9.0"
   },
-  "description": "An Ionic project",
-  "cordova": {
-    "plugins": {
-      "cordova-plugin-bluetooth-serial": {}
-    },
-    "platforms": [
-      "android"
-    ]
-  }
+  "description": "An Ionic project"
 }

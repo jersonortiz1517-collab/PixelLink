@@ -4,9 +4,7 @@ const config: CapacitorConfig = {
   appId: 'io.ionic.starter',
   appName: 'PixelLink',
   webDir: 'www',
-  android: {
-    allowMixedContent: true
-  }
+  cordova: {}, 
 };
 
 export default config;
