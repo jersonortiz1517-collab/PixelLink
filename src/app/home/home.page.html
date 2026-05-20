@@ -20,5 +20,48 @@
     Enviar
   </ion-button>
 
-  <p>Estado: {{ estado }}</p>
+  <p class="estado">Estado: {{ estado }}</p>
+
+  <!-- ============= Canvas 32x24 (pantalla LED) ============= -->
+  <div class="canvas-section">
+    <div class="canvas-toolbar">
+      <ion-button size="small" fill="outline" (click)="limpiar()">Limpiar</ion-button>
+      <ion-button
+        size="small"
+        [fill]="modoDibujo === 'on' ? 'solid' : 'outline'"
+        (click)="modoDibujo = 'on'">
+        Pintar
+      </ion-button>
+      <ion-button
+        size="small"
+        [fill]="modoDibujo === 'off' ? 'solid' : 'outline'"
+        (click)="modoDibujo = 'off'">
+        Borrar
+      </ion-button>
+    </div>
+
+    <div
+      #ledCanvas
+      class="led-canvas"
+      (pointerdown)="onPointerDown($event)"
+      (pointermove)="onPointerMove($event)"
+      (pointerup)="onPointerUp($event)"
+      (pointercancel)="onPointerUp($event)">
+      <span *ngFor="let i of cellIndices; trackBy: trackByIdx" class="led"></span>
+    </div>
+  </div>
+
+  <!-- ============= Paleta de iconos ============= -->
+  <p class="iconos-titulo">Iconos — toca uno para cargarlo y dibuja encima con el dedo:</p>
+  <div class="iconos">
+    <button
+      *ngFor="let ic of iconos; trackBy: trackByIconId"
+      type="button"
+      class="icono-btn"
+      [class.activo]="iconoActivoId === ic.id"
+      (click)="cargarIcono(ic)">
+      <span class="emoji">{{ ic.emoji }}</span>
+      <span class="nombre">{{ ic.nombre }}</span>
+    </button>
+  </div>
 </ion-content>
